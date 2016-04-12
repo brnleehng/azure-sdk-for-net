@@ -12,25 +12,36 @@ namespace Microsoft.Azure.Management.Batch.Models
     using Microsoft.Rest.Serialization;
 
     /// <summary>
-    /// Contains information about an application package.
+    /// Response to an ApplicationOperations.GetApplicationPackage request.
     /// </summary>
-    public partial class ApplicationPackage
+    public partial class GetApplicationPackageResult
     {
         /// <summary>
-        /// Initializes a new instance of the ApplicationPackage class.
+        /// Initializes a new instance of the GetApplicationPackageResult
+        /// class.
         /// </summary>
-        public ApplicationPackage() { }
+        public GetApplicationPackageResult() { }
 
         /// <summary>
-        /// Initializes a new instance of the ApplicationPackage class.
+        /// Initializes a new instance of the GetApplicationPackageResult
+        /// class.
         /// </summary>
-        public ApplicationPackage(string version = default(string), PackageState? state = default(PackageState?), string format = default(string), DateTime? lastActivationTime = default(DateTime?))
+        public GetApplicationPackageResult(string id = default(string), string version = default(string), PackageState? state = default(PackageState?), string format = default(string), string storageUrl = default(string), DateTime? storageUrlExpiry = default(DateTime?), DateTime? lastActivationTime = default(DateTime?))
         {
+            Id = id;
             Version = version;
             State = state;
             Format = format;
+            StorageUrl = storageUrl;
+            StorageUrlExpiry = storageUrlExpiry;
             LastActivationTime = lastActivationTime;
         }
+
+        /// <summary>
+        /// The id of the application.
+        /// </summary>
+        [JsonProperty(PropertyName = "id")]
+        public string Id { get; set; }
 
         /// <summary>
         /// The version of the application package.
@@ -50,6 +61,18 @@ namespace Microsoft.Azure.Management.Batch.Models
         /// </summary>
         [JsonProperty(PropertyName = "format")]
         public string Format { get; set; }
+
+        /// <summary>
+        /// The storage URL at which the application package is stored.
+        /// </summary>
+        [JsonProperty(PropertyName = "storageUrl")]
+        public string StorageUrl { get; set; }
+
+        /// <summary>
+        /// The UTC time at which the storage URL will expire.
+        /// </summary>
+        [JsonProperty(PropertyName = "storageUrlExpiry")]
+        public DateTime? StorageUrlExpiry { get; set; }
 
         /// <summary>
         /// The time at which the package was last activated, if the package
