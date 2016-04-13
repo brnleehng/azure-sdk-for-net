@@ -21,6 +21,7 @@ using System.Net.Http;
 using Microsoft.Azure.Management.Batch;
 using Microsoft.Azure.Management.Batch.Models;
 using Batch.Tests.Helpers;
+using Microsoft.Rest;
 
 namespace Microsoft.Azure.Batch.Tests
 {
@@ -28,9 +29,11 @@ namespace Microsoft.Azure.Batch.Tests
     {
         public BatchManagementClient GetBatchManagementClient(RecordedDelegatingHandler handler)
         {
-            var certCreds = new CertificateCloudCredentials(Guid.NewGuid().ToString(), new System.Security.Cryptography.X509Certificates.X509Certificate2());
             handler.IsPassThrough = false;
-            return new BatchManagementClient(certCreds).WithHandler(handler);
+            var client = new BatchManagementClient(handler);
+            client.ApiVersion = "2015-12-01";
+            client.SubscriptionId = "00000000-0000-0000-0000-000000000000";
+            return client;
         }
 
         [Fact]
@@ -39,7 +42,7 @@ namespace Microsoft.Azure.Batch.Tests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Subscriptions.GetSubscriptionQuotas(null));
+            Assert.Throws<ValidationException>(() => client.Subscription.GetSubscriptionQuotas(null));
         }
 
         [Fact]
@@ -56,7 +59,7 @@ namespace Microsoft.Azure.Batch.Tests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            var result = client.Subscriptions.GetSubscriptionQuotas("westus");
+            var result = client.Subscription.GetSubscriptionQuotas("westus");
 
             // Validate headers
             Assert.Equal(HttpMethod.Get, handler.Method);

@@ -19,12 +19,15 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using Batch.Tests.Helpers;
 using Microsoft.Azure;
 using Microsoft.Azure.Management.Batch;
 using Microsoft.Azure.Management.Batch.Models;
 
 using Xunit;
+using Microsoft.Rest;
+using System.Threading.Tasks;
 
 namespace Batch.Tests.InMemoryTests
 {
@@ -32,9 +35,11 @@ namespace Batch.Tests.InMemoryTests
     {
         public BatchManagementClient GetBatchManagementClient(RecordedDelegatingHandler handler)
         {
-            var certCreds = new CertificateCloudCredentials(Guid.NewGuid().ToString(), new System.Security.Cryptography.X509Certificates.X509Certificate2());
             handler.IsPassThrough = false;
-            return new BatchManagementClient(certCreds).WithHandler(handler);
+            var client = new BatchManagementClient(handler);
+            client.ApiVersion = "2015-12-01";
+            client.SubscriptionId = "00000000-0000-0000-0000-000000000000";
+            return client;
         }
 
         [Fact]
@@ -45,16 +50,13 @@ namespace Batch.Tests.InMemoryTests
             var client = GetBatchManagementClient(handler);
 
             // If storageId is not set this will throw an ArgumentNullException
-            var ex = Assert.Throws<ArgumentNullException>(() => client.Accounts.Create("resourceGroupName", "acctName", new BatchAccountCreateParameters
+            var ex = Assert.Throws<ValidationException>(() => client.Account.Create("resourceGroupName", "acctName", new BatchAccountCreateParameters
             {
                 Location = "South Central US",
-                Properties = new AccountBaseProperties
-                {
-                    AutoStorage = new AutoStorageBaseProperties()
-                }
+                AutoStorage = new AutoStorageBaseProperties()
             }));
 
-            Assert.Equal("parameters.Properties.AutoStorage.StorageAccountId", ex.ParamName);
+            Assert.Equal("StorageAccountId", ex.Target.ToString());
         }
 
         [Fact]
@@ -78,15 +80,13 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AddApplicationPackageResponse result = client.Applications.AddApplicationPackage("resourceGroupName", "acctName", "appId", "beta");
+            var result = client.ApplicationOperations.AddApplicationPackage("resourceGroupName", "acctName", "appId", "beta");
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Put, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
             // Validate result
-            Assert.Equal(HttpStatusCode.Created, result.StatusCode);
-
             Assert.Equal(utcNow, result.StorageUrlExpiry);
             Assert.Equal("foo", result.Id);
             Assert.Equal("beta", result.Version);
@@ -96,27 +96,16 @@ namespace Batch.Tests.InMemoryTests
         [Fact]
         public void AddApplicationValidateMessage()
         {
-            var utcNow = DateTime.UtcNow;
-
             HttpResponseMessage response = new HttpResponseMessage(HttpStatusCode.Created)
             {
-                StatusCode = HttpStatusCode.Created,
-                Content = new StringContent(@"{
-                    'id': 'foo',
-                    'allowUpdates': 'true',
-                    'displayName' : 'displayName',
-                    'defaultVersion' : 'beta',
-                    'packages':[
-                        {'version':'fooVersion', 'state':'pending', 'format': 'betaFormat', 'lastActivationTime': '" + utcNow.ToString("o") + @"'}],
-
-                    }")
+                StatusCode = HttpStatusCode.Created
             };
 
             response.Headers.Add("x-ms-request-id", "1");
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AzureOperationResponse result = client.Applications.AddApplication(
+            client.ApplicationOperations.AddApplication(
                 "resourceGroupName",
                 "acctName",
                 "appId",
@@ -126,9 +115,6 @@ namespace Batch.Tests.InMemoryTests
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Put, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
-
-            // Validate result
-            Assert.Equal(HttpStatusCode.Created, result.StatusCode);
         }
 
         [Fact]
@@ -143,11 +129,12 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AzureOperationResponse result = client.Applications.ActivateApplicationPackage(
+            var result = Task.Factory.StartNew(() => client.ApplicationOperations.ActivateApplicationPackageWithHttpMessagesAsync(
                 "resourceGroupName",
                 "acctName",
-                "appId", "version",
-                new ActivateApplicationPackageParameters("zip"));
+                "appId",
+                "version",
+                new ActivateApplicationPackageParameters("zip"))).Unwrap().GetAwaiter().GetResult();
 
 
             // Validate headers - User-Agent for certs, Authorization for tokens
@@ -155,7 +142,7 @@ namespace Batch.Tests.InMemoryTests
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
             // Validate result
-            Assert.Equal(HttpStatusCode.NoContent, result.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, result.Response.StatusCode);
         }
 
         [Fact]
@@ -170,18 +157,14 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AzureOperationResponse result = client.Applications.DeleteApplication(
-                "resourceGroupName",
-                "acctName",
-                "appId");
-
+            var result = Task.Factory.StartNew(() => client.ApplicationOperations.DeleteApplicationWithHttpMessagesAsync("resourceGroupName", "acctName", "appId")).Unwrap().GetAwaiter().GetResult();
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Delete, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
             // Validate result
-            Assert.Equal(HttpStatusCode.NoContent, result.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, result.Response.StatusCode);
         }
 
         [Fact]
@@ -196,19 +179,18 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AzureOperationResponse result = client.Applications.DeleteApplicationPackage(
-                "resourceGroupName",
-                "acctName",
-                "appId",
-                "version");
-
+            var result = Task.Factory.StartNew(() => client.ApplicationOperations.DeleteApplicationPackageWithHttpMessagesAsync(
+                            "resourceGroupName",
+                            "acctName",
+                            "appId",
+                            "version")).Unwrap().GetAwaiter().GetResult();
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Delete, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
             // Validate result
-            Assert.Equal(HttpStatusCode.NoContent, result.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, result.Response.StatusCode);
         }
 
         [Fact]
@@ -235,25 +217,22 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            GetApplicationResponse result = client.Applications.GetApplication("applicationId", "acctName", "id");
+            var result = client.ApplicationOperations.GetApplication("applicationId", "acctName", "id");
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Get, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
-            // Validate result
-            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
 
-
-            Assert.Equal("foo", result.Application.Id);
-            Assert.Equal(true, result.Application.AllowUpdates);
-            Assert.Equal("beta", result.Application.DefaultVersion);
-            Assert.Equal("displayName", result.Application.DisplayName);
-            Assert.Equal(1, result.Application.ApplicationPackages.Count);
-            Assert.Equal("betaFormat", result.Application.ApplicationPackages.First().Format);
-            Assert.Equal(PackageState.Pending, result.Application.ApplicationPackages.First().State);
-            Assert.Equal("fooVersion", result.Application.ApplicationPackages.First().Version);
-            Assert.Equal(utcNow, result.Application.ApplicationPackages.First().LastActivationTime);
+            Assert.Equal("foo", result.Id);
+            Assert.Equal(true, result.AllowUpdates);
+            Assert.Equal("beta", result.DefaultVersion);
+            Assert.Equal("displayName", result.DisplayName);
+            Assert.Equal(1, result.Packages.Count);
+            Assert.Equal("betaFormat", result.Packages.First().Format);
+            Assert.Equal(PackageState.Pending, result.Packages.First().State);
+            Assert.Equal("fooVersion", result.Packages.First().Version);
+            Assert.Equal(utcNow, result.Packages.First().LastActivationTime);
         }
 
         [Fact]
@@ -280,14 +259,11 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            GetApplicationPackageResponse result = client.Applications.GetApplicationPackage("resourceGroupName", "acctName", "id", "VER");
+            var result = client.ApplicationOperations.GetApplicationPackage("resourceGroupName", "acctName", "id", "VER");
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Get, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
-
-            // Validate result
-            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
 
             Assert.Equal("foo", result.Id);
             Assert.Equal("//storageUrl", result.StorageUrl);
@@ -298,14 +274,6 @@ namespace Batch.Tests.InMemoryTests
             Assert.Equal(utcNow, result.StorageUrlExpiry);
         }
 
-        [Fact]
-        public void ApplicationListNextThrowsExceptions()
-        {
-            var handler = new RecordedDelegatingHandler();
-            var client = GetBatchManagementClient(handler);
-
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ListNext(null));
-        }
 
         [Fact]
         public void ListApplicationValidateMessage()
@@ -332,25 +300,22 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            ListApplicationsResponse result = client.Applications.List("resourceGroupName", "acctName", new ListApplicationsParameters());
+            var result = client.ApplicationOperations.List("resourceGroupName", "acctName");
 
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal(HttpMethod.Get, handler.Method);
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
 
-            // Validate result
-            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
-
-            Application application = result.Applications.First();
+            Application application = result.Value.First();
             Assert.Equal("foo", application.Id);
             Assert.Equal(true, application.AllowUpdates);
             Assert.Equal("beta", application.DefaultVersion);
             Assert.Equal("DisplayName", application.DisplayName);
-            Assert.Equal(application.ApplicationPackages.Count, 2);
-            Assert.Equal("beta", application.ApplicationPackages.First().Format);
-            Assert.Equal(PackageState.Pending, application.ApplicationPackages.First().State);
-            Assert.Equal("version1", application.ApplicationPackages.First().Version);
-            Assert.Equal(utcNow, application.ApplicationPackages.First().LastActivationTime);
+            Assert.Equal(application.Packages.Count, 2);
+            Assert.Equal("beta", application.Packages.First().Format);
+            Assert.Equal(PackageState.Pending, application.Packages.First().State);
+            Assert.Equal("version1", application.Packages.First().Version);
+            Assert.Equal(utcNow, application.Packages.First().LastActivationTime);
         }
 
         [Fact]
@@ -365,7 +330,7 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler(response) { StatusCodeToReturn = HttpStatusCode.OK };
             var client = GetBatchManagementClient(handler);
 
-            AzureOperationResponse result = client.Applications.UpdateApplication(
+            client.ApplicationOperations.UpdateApplication(
                 "resourceGroupName",
                 "acctName",
                 "appId", new UpdateApplicationParameters() { AllowUpdates = true, DisplayName = "display-name", DefaultVersion = "blah" }
@@ -375,9 +340,6 @@ namespace Batch.Tests.InMemoryTests
             // Validate headers - User-Agent for certs, Authorization for tokens
             Assert.Equal("PATCH", handler.Method.ToString());
             Assert.NotNull(handler.RequestHeaders.GetValues("User-Agent"));
-
-            // Validate result
-            Assert.Equal(HttpStatusCode.NoContent, result.StatusCode);
         }
 
         [Fact]
@@ -386,11 +348,11 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ActivateApplicationPackage(null, "foo", "foo", "foo", new ActivateApplicationPackageParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ActivateApplicationPackage("foo", null, "foo", "foo", new ActivateApplicationPackageParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ActivateApplicationPackage("foo", "foo", null, "foo", new ActivateApplicationPackageParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ActivateApplicationPackage("foo", "foo", "foo", null, new ActivateApplicationPackageParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.ActivateApplicationPackage("foo", "foo", "foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.ActivateApplicationPackage(null, "foo", "foo", "foo", new ActivateApplicationPackageParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.ActivateApplicationPackage("foo", null, "foo", "foo", new ActivateApplicationPackageParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.ActivateApplicationPackage("foo", "foo", null, "foo", new ActivateApplicationPackageParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.ActivateApplicationPackage("foo", "foo", "foo", null, new ActivateApplicationPackageParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.ActivateApplicationPackage("foo", "foo", "foo", "foo", null));
         }
 
         [Fact]
@@ -399,10 +361,10 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.AddApplication(null, "foo", "foo", new AddApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.AddApplication("foo", null, "foo", new AddApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.AddApplication("foo", "foo", null, new AddApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.AddApplication("foo", "foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.AddApplication(null, "foo", "foo", new AddApplicationParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.AddApplication("foo", null, "foo", new AddApplicationParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.AddApplication("foo", "foo", null, new AddApplicationParameters()));
+            Assert.Throws<NullReferenceException>(() => client.ApplicationOperations.AddApplication("foo", "foo", "foo", null));
         }
 
         [Fact]
@@ -411,9 +373,9 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplication(null, "foo", "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplication("foo", null, "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplication("foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplication(null, "foo", "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplication("foo", null, "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplication("foo", "foo", null));
         }
 
         [Fact]
@@ -422,10 +384,10 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplicationPackage(null, "foo", "foo", "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplicationPackage("foo", null, "foo", "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplicationPackage("foo", "foo", null, "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.DeleteApplicationPackage("foo", "foo", "bar", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplicationPackage(null, "foo", "foo", "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplicationPackage("foo", null, "foo", "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplicationPackage("foo", "foo", null, "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.DeleteApplicationPackage("foo", "foo", "bar", null));
         }
 
         [Fact]
@@ -433,9 +395,9 @@ namespace Batch.Tests.InMemoryTests
         {
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
-            Assert.Throws<ArgumentNullException>(() => client.Applications.GetApplication(null, "foo", "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.GetApplication("foo", null, "foo"));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.GetApplication("foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.GetApplication(null, "foo", "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.GetApplication("foo", null, "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.GetApplication("foo", "foo", null));
         }
 
         [Fact]
@@ -444,9 +406,8 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.List(null, "foo", new ListApplicationsParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.List("foo", null, new ListApplicationsParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.List("foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.List(null, "foo"));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.List("foo", null));
         }
 
         [Fact]
@@ -455,10 +416,10 @@ namespace Batch.Tests.InMemoryTests
             var handler = new RecordedDelegatingHandler();
             var client = GetBatchManagementClient(handler);
 
-            Assert.Throws<ArgumentNullException>(() => client.Applications.UpdateApplication(null, "foo", "foo", new UpdateApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.UpdateApplication("foo", null, "foo", new UpdateApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.UpdateApplication("foo", "foo", null, new UpdateApplicationParameters()));
-            Assert.Throws<ArgumentNullException>(() => client.Applications.UpdateApplication("foo", "foo", "foo", null));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.UpdateApplication(null, "foo", "foo", new UpdateApplicationParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.UpdateApplication("foo", null, "foo", new UpdateApplicationParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.UpdateApplication("foo", "foo", null, new UpdateApplicationParameters()));
+            Assert.Throws<ValidationException>(() => client.ApplicationOperations.UpdateApplication("foo", "foo", "foo", null));
         }
     }
 }
